@@ -64,18 +64,25 @@ export default function App() {
   const [simResults, setSimResults] = useState<Record<string, any>>({});
   const [simLoading, setSimLoading] = useState<Record<string, boolean>>({});
 
+  const [adminApiKey, setAdminApiKey] = useState('admin_secret_key_123');
+  const [agentApiKey, setAgentApiKey] = useState('agkey_researchbot_7f8a9b2c3d');
+
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [adminApiKey, agentApiKey]);
 
   const fetchData = async () => {
     setLoading(true);
+    const authHeaders = {
+      Authorization: `Bearer ${adminApiKey}`,
+      'x-agent-api-key': agentApiKey,
+    };
     try {
       const [metricsRes, agentsRes, vendorsRes, auditRes] = await Promise.all([
-        fetch(`${API_BASE}/dashboard/metrics`).then((r) => r.json()).catch(() => null),
-        fetch(`${API_BASE}/agents`).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/dashboard/metrics`, { headers: authHeaders }).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/agents`, { headers: authHeaders }).then((r) => r.json()).catch(() => null),
         fetch(`${API_BASE}/vendors`).then((r) => r.json()).catch(() => null),
-        fetch(`${API_BASE}/audit-events`).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/audit-events`, { headers: authHeaders }).then((r) => r.json()).catch(() => null),
       ]);
 
       if (metricsRes?.success) setMetrics(metricsRes.data);

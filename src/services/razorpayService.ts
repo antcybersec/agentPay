@@ -4,9 +4,22 @@ import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
+const getSecret = (key: string, devFallback: string): string => {
+  const value = process.env[key];
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction) {
+    if (!value || value === devFallback || value.includes('dummy') || value.includes('your_key_here')) {
+      throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in production mode. Refusing to start with development default.`);
+    }
+    return value;
+  }
+  return value || devFallback;
+};
+
 const getRazorpayClient = () => {
-  const key_id = process.env.RAZORPAY_KEY_ID || 'rzp_test_dummy_key_id';
-  const key_secret = process.env.RAZORPAY_KEY_SECRET || 'dummy_key_secret';
+  const key_id = getSecret('RAZORPAY_KEY_ID', 'rzp_test_dummy_key_id');
+  const key_secret = getSecret('RAZORPAY_KEY_SECRET', 'dummy_key_secret');
   return new Razorpay({ key_id, key_secret });
 };
 
@@ -58,7 +71,7 @@ export class RazorpayService {
       );
     }
 
-    const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_dummy_key_id';
+    const keyId = getSecret('RAZORPAY_KEY_ID', 'rzp_test_dummy_key_id');
     const isMockCredentials = keyId.includes('dummy') || keyId.includes('your_key_here');
     const provider = isMockCredentials ? 'mock' : 'razorpay';
     const amountInPaise = Math.round(intent.amount * 100);

@@ -28,6 +28,20 @@ export interface AuthenticatedUserRequest extends Request {
   isAdmin?: boolean;
 }
 
+// Production Secrets Guard & Helper
+const getSecret = (key: string, devFallback: string): string => {
+  const value = process.env[key];
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction) {
+    if (!value || value === devFallback || value.includes('dummy') || value.includes('your_key_here')) {
+      throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in production mode. Refusing to start with development default.`);
+    }
+    return value;
+  }
+  return value || devFallback;
+};
+
 // Admin Authentication Middleware
 const requireAdminAuth = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers['authorization'];
@@ -36,7 +50,7 @@ const requireAdminAuth = (req: Request, res: Response, next: NextFunction) => {
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, '');
-  const adminKey = process.env.ADMIN_API_KEY || 'admin_secret_key_123';
+  const adminKey = getSecret('ADMIN_API_KEY', 'admin_secret_key_123');
 
   if (token !== adminKey) {
     return res.status(401).json({ success: false, error: 'Invalid admin API key' });
@@ -53,7 +67,7 @@ export const requireAgentOrAdminAuth = async (req: AuthenticatedUserRequest, res
   // 1. Check Admin Auth Header
   if (authHeader) {
     const token = authHeader.replace(/^Bearer\s+/i, '');
-    const adminKey = process.env.ADMIN_API_KEY || 'admin_secret_key_123';
+    const adminKey = getSecret('ADMIN_API_KEY', 'admin_secret_key_123');
     if (token === adminKey) {
       req.isAdmin = true;
       return next();
@@ -85,11 +99,22 @@ export const requireAgentOrAdminAuth = async (req: AuthenticatedUserRequest, res
   });
 };
 
+// Development / Test Harness Production Guard
+const requireDevOrTestEnvironment = (req: Request, res: Response, next: NextFunction) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access denied: Test, simulation, and reset endpoints are disabled in production environment.',
+    });
+  }
+  next();
+};
+
 // Special raw body parser for Webhook signature verification endpoint
 app.post('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
   try {
     const signature = (req.headers['x-razorpay-signature'] as string) || '';
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'dummy_webhook_secret';
+    const webhookSecret = getSecret('RAZORPAY_WEBHOOK_SECRET', 'dummy_webhook_secret');
     const rawBody = req.body;
 
     const isValidSignature = WebhookService.verifyWebhookSignature(rawBody, signature, webhookSecret);
@@ -130,13 +155,20 @@ app.get('/health', (req: Request, res: Response) => {
   });
 });
 
-// GET /api/agents - List agents & active policies
-app.get('/api/agents', async (req: Request, res: Response) => {
+// GET /api/agents - List agents & active policies (PROTECTED & API KEY REDACTED)
+app.get('/api/agents', requireAgentOrAdminAuth, async (req: Request, res: Response) => {
   try {
     const agents = await prisma.agent.findMany({
       include: { policy: true },
     });
-    res.json({ success: true, data: agents });
+
+    // SECURITY HARDENING: Redact secret apiKey from output payload
+    const sanitizedAgents = agents.map((agent) => ({
+      ...agent,
+      apiKey: '[REDACTED]',
+    }));
+
+    res.json({ success: true, data: sanitizedAgents });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -152,8 +184,8 @@ app.get('/api/vendors', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/dashboard/metrics - Overview dashboard counts & spending metrics
-app.get('/api/dashboard/metrics', async (req: Request, res: Response) => {
+// GET /api/dashboard/metrics - Overview metrics (PROTECTED)
+app.get('/api/dashboard/metrics', requireAgentOrAdminAuth, async (req: Request, res: Response) => {
   try {
     const agents = await prisma.agent.findMany();
     const pendingIntents = await prisma.paymentIntent.count({
@@ -540,12 +572,24 @@ app.put('/api/agent-policy/:agentId', requireAdminAuth, async (req: Request, res
       return res.status(404).json({ success: false, error: `Policy for Agent ${agentId} not found.` });
     }
 
+    const autoLimit = autoApproveLimit !== undefined ? Number(autoApproveLimit) : policy.autoApproveLimit;
+    const humanLimit = humanApprovalLimit !== undefined ? Number(humanApprovalLimit) : policy.humanApprovalLimit;
+    const hardLimit = hardMaximum !== undefined ? Number(hardMaximum) : policy.hardMaximum;
+
+    // VALIDATE THRESHOLD HIERARCHY
+    if (autoLimit < 0 || humanLimit < autoLimit || hardLimit < humanLimit) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid policy threshold hierarchy. Required: 0 <= autoApproveLimit <= humanApprovalLimit <= hardMaximum.',
+      });
+    }
+
     const updatedPolicy = await prisma.agentPolicy.update({
       where: { agentId },
       data: {
-        autoApproveLimit: autoApproveLimit !== undefined ? Number(autoApproveLimit) : policy.autoApproveLimit,
-        humanApprovalLimit: humanApprovalLimit !== undefined ? Number(humanApprovalLimit) : policy.humanApprovalLimit,
-        hardMaximum: hardMaximum !== undefined ? Number(hardMaximum) : policy.hardMaximum,
+        autoApproveLimit: autoLimit,
+        humanApprovalLimit: humanLimit,
+        hardMaximum: hardLimit,
       },
     });
 
@@ -579,25 +623,37 @@ app.put('/api/agents/:id/status', requireAdminAuth, async (req: Request, res: Re
   }
 });
 
-// GET /api/audit-events - Fetch audit log ledger
-app.get('/api/audit-events', async (req: Request, res: Response) => {
+// GET /api/audit-events - Fetch audit log ledger (PROTECTED)
+app.get('/api/audit-events', requireAgentOrAdminAuth, async (req: Request, res: Response) => {
   try {
     const events = await prisma.auditEvent.findMany({
       orderBy: { timestamp: 'desc' },
       include: { agent: true, paymentIntent: true },
     });
-    res.json({ success: true, data: events });
+
+    // Sanitize agent API keys in output
+    const sanitizedEvents = events.map((event) => ({
+      ...event,
+      agent: event.agent
+        ? {
+            ...event.agent,
+            apiKey: '[REDACTED]',
+          }
+        : null,
+    }));
+
+    res.json({ success: true, data: sanitizedEvents });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // =========================================================
-// HARNESS & SIMULATION ENDPOINTS (DEVELOPMENT & DEMO)
+// HARNESS & SIMULATION ENDPOINTS (DEVELOPMENT & DEMO ONLY)
 // =========================================================
 
 // POST /api/test/trigger-webhook - Local Webhook Test Simulator
-app.post('/api/test/trigger-webhook', async (req: Request, res: Response) => {
+app.post('/api/test/trigger-webhook', requireDevOrTestEnvironment, async (req: Request, res: Response) => {
   try {
     const { event, razorpayOrderId, amountPaid } = req.body;
     const eventType = event || 'payment.captured';
@@ -614,7 +670,7 @@ app.post('/api/test/trigger-webhook', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: `No PaymentIntent found for Razorpay Order ${razorpayOrderId}` });
     }
 
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'dummy_webhook_secret';
+    const webhookSecret = getSecret('RAZORPAY_WEBHOOK_SECRET', 'dummy_webhook_secret');
     const amountInPaise = Math.round((amountPaid || intent.amount) * 100);
     const paymentId = `pay_sim_${crypto.randomBytes(6).toString('hex')}`;
 
@@ -663,10 +719,9 @@ app.post('/api/test/trigger-webhook', async (req: Request, res: Response) => {
 });
 
 // POST /api/test/security-simulation - Backend Attack Simulation Endpoint
-app.post('/api/test/security-simulation', async (req: Request, res: Response) => {
+app.post('/api/test/security-simulation', requireDevOrTestEnvironment, async (req: Request, res: Response) => {
   try {
     const { attackType } = req.body;
-    const researchBotKey = 'agkey_researchbot_7f8a9b2c3d';
     const agentId = 'agent-researchbot-001';
 
     if (attackType === 'MALICIOUS_PAYLOAD_INJECTION') {
@@ -693,19 +748,6 @@ app.post('/api/test/security-simulation', async (req: Request, res: Response) =>
     }
 
     if (attackType === 'UNAUTHENTICATED_CREATE_ORDER') {
-      const intent = await prisma.paymentIntent.findFirst({ where: { status: 'APPROVED' } }) ||
-        await prisma.paymentIntent.create({
-          data: {
-            agentId,
-            rawVendorName: 'ArXiv Data Insights',
-            amount: 1000,
-            category: 'RESEARCH_PAPER',
-            purpose: 'Unauthenticated test',
-            status: 'APPROVED',
-            decision: 'ALLOW',
-          },
-        });
-
       return res.json({
         success: true,
         blocked: true,
@@ -788,7 +830,7 @@ app.post('/api/test/security-simulation', async (req: Request, res: Response) =>
 });
 
 // POST /api/test/reset-demo - Resets DB to clean seeded demo state
-app.post('/api/test/reset-demo', async (req: Request, res: Response) => {
+app.post('/api/test/reset-demo', requireDevOrTestEnvironment, async (req: Request, res: Response) => {
   try {
     await prisma.auditEvent.deleteMany();
     await prisma.paymentIntent.deleteMany();
