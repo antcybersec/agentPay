@@ -1,0 +1,89 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Agent {
+  id             String          @id @default(uuid())
+  name           String
+  role           String
+  status         String          @default("ACTIVE") // ACTIVE, PAUSED, REVOKED
+  dailyBudget    Float           // Max allowed expenditure per day in currency units
+  monthlyBudget  Float           // Max allowed expenditure per month in currency units
+  perTxLimit     Float           // Max allowed single transaction amount
+  spentDaily     Float           @default(0.0)
+  spentMonthly   Float           @default(0.0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  policy         AgentPolicy?
+  paymentIntents PaymentIntent[]
+  auditEvents    AuditEvent[]
+}
+
+model AgentPolicy {
+  id                         String   @id @default(uuid())
+  agentId                    String   @unique
+  agent                      Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  autoApproveLimit           Float    // Max amount for automatic ALLOW
+  humanApprovalThreshold     Float    // Max amount for REQUIRE_HUMAN_APPROVAL (amounts > this are BLOCKED)
+  allowedCategories          String   // JSON string array e.g. ["RESEARCH_PAPER", "DATASET", "CLOUD_COMPUTE"]
+  blockedCategories          String   // JSON string array e.g. ["GAMBLING", "CRYPTO"]
+  allowedVendorIds           String   // JSON string array of pre-approved vendor IDs
+  requireVendorVerification Boolean  @default(true)
+  isActive                   Boolean  @default(true)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+model Vendor {
+  id                String          @id @default(uuid())
+  name              String
+  domain            String          @unique
+  category          String
+  status            String          @default("VERIFIED") // VERIFIED, UNVERIFIED, BLOCKED
+  razorpayAccountId String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  paymentIntents    PaymentIntent[]
+}
+
+model PaymentIntent {
+  id                String       @id @default(uuid())
+  agentId           String
+  agent             Agent        @relation(fields: [agentId], references: [id])
+  vendorId          String?
+  vendor            Vendor?      @relation(fields: [vendorId], references: [id])
+  rawVendorName     String
+  amount            Float
+  currency          String       @default("INR")
+  category          String
+  purpose           String
+  status            String       @default("CREATED") // CREATED, EVALUATED, APPROVED, REJECTED, PENDING_HUMAN_APPROVAL, COMPLETED, FAILED
+  decision          String?      // ALLOW, BLOCK, REQUIRE_HUMAN_APPROVAL
+  rejectionReason   String?
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  auditEvents       AuditEvent[]
+}
+
+model AuditEvent {
+  id              String         @id @default(uuid())
+  paymentIntentId String?
+  paymentIntent   PaymentIntent? @relation(fields: [paymentIntentId], references: [id])
+  agentId         String
+  agent           Agent          @relation(fields: [agentId], references: [id])
+  eventType       String         // PAYMENT_INTENT_CREATED, POLICY_EVALUATED, HUMAN_APPROVED, HUMAN_REJECTED, ORDER_CREATED, PAYMENT_SUCCESS, PAYMENT_FAILED
+  decision        String?        // ALLOW, BLOCK, REQUIRE_HUMAN_APPROVAL
+  reason          String
+  metadata        String         // JSON string representation of evaluation snapshot
+  timestamp       DateTime       @default(now())
+}
