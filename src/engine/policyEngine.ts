@@ -10,7 +10,7 @@ import {
  * 
  * Rules are evaluated in strict priority order.
  * The LLM NEVER directly authorizes payments.
- * Returns ALLOW, BLOCK, or REQUIRE_HUMAN_APPROVAL.
+ * Decision outcomes: ALLOW, BLOCK, or REQUIRE_HUMAN_APPROVAL.
  */
 export class PolicyEngine {
   public static evaluate(input: EvaluationInput): EvaluationResult {
@@ -65,17 +65,8 @@ export class PolicyEngine {
       );
     }
 
-    // Rule 3: Vendor Existence Check (Unknown Vendor)
-    if (!vendor) {
-      return makeResult(
-        'BLOCK',
-        `Unknown vendor "${paymentIntent.rawVendorName}". Vendor is not registered in the trusted database.`,
-        'UNKNOWN_VENDOR'
-      );
-    }
-
-    // Rule 4: Vendor Block Status Check
-    if (vendor.status === 'BLOCKED') {
+    // Rule 3: Vendor Block Status Check (BLOCKED vendor -> BLOCK)
+    if (vendor && vendor.status === 'BLOCKED') {
       return makeResult(
         'BLOCK',
         `Vendor "${vendor.name}" (${vendor.domain}) is explicitly blocked.`,
@@ -83,8 +74,8 @@ export class PolicyEngine {
       );
     }
 
-    // Rule 5: Vendor Verification Check
-    if (policy.requireVendorVerification && vendor.status !== 'VERIFIED') {
+    // Rule 4: Vendor Verification Check for registered non-verified vendors
+    if (vendor && policy.requireVendorVerification && vendor.status !== 'VERIFIED') {
       return makeResult(
         'BLOCK',
         `Vendor "${vendor.name}" status is ${vendor.status}. Policy requires verified vendors.`,
@@ -92,8 +83,9 @@ export class PolicyEngine {
       );
     }
 
-    // Rule 6: Allowed Vendor List Check
+    // Rule 5: Allowed Vendor Whitelist Check (if whitelist configured)
     if (
+      vendor &&
       policy.allowedVendorIds &&
       policy.allowedVendorIds.length > 0 &&
       !policy.allowedVendorIds.includes(vendor.id)
@@ -105,19 +97,19 @@ export class PolicyEngine {
       );
     }
 
-    // Rule 7: Blocked Category Check
+    // Rule 6: Blocked Category Check
     if (
       policy.blockedCategories &&
       policy.blockedCategories.includes(paymentIntent.category)
     ) {
       return makeResult(
         'BLOCK',
-        `Category "${paymentIntent.category}" is explicitly blocked by policy.`,
+        `Category "${paymentIntent.category}" is explicitly blocked by financial policy.`,
         'BLOCKED_CATEGORY'
       );
     }
 
-    // Rule 8: Allowed Category Check
+    // Rule 7: Allowed Category Check
     if (
       policy.allowedCategories &&
       policy.allowedCategories.length > 0 &&
@@ -130,57 +122,66 @@ export class PolicyEngine {
       );
     }
 
-    // Rule 9: Single Transaction Limit Check
-    if (paymentIntent.amount > agent.perTxLimit) {
+    // Rule 8: Hard Maximum Transaction Limit Check (Evaluated before aggregate budget checks)
+    if (paymentIntent.amount > policy.hardMaximum) {
       return makeResult(
         'BLOCK',
-        `Payment amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds single transaction limit of ${agent.perTxLimit}.`,
-        'PER_TX_LIMIT_EXCEEDED'
+        `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds hard maximum transaction limit of ${policy.hardMaximum}.`,
+        'HARD_MAXIMUM_EXCEEDED'
       );
     }
 
-    // Rule 10: Daily Budget Check
+    // Rule 9: Daily Budget Check
     if (agent.spentDaily + paymentIntent.amount > agent.dailyBudget) {
       return makeResult(
         'BLOCK',
-        `Insufficient budget: Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) + daily spent (${agent.spentDaily}) exceeds daily budget limit (${agent.dailyBudget}).`,
+        `Daily budget limit exceeded: Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) + daily spent (${agent.spentDaily}) exceeds daily budget limit (${agent.dailyBudget}).`,
         'DAILY_BUDGET_EXCEEDED'
       );
     }
 
-    // Rule 11: Monthly Budget Check
+    // Rule 10: Monthly Budget Check
     if (agent.spentMonthly + paymentIntent.amount > agent.monthlyBudget) {
       return makeResult(
         'BLOCK',
-        `Insufficient budget: Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) + monthly spent (${agent.spentMonthly}) exceeds monthly budget limit (${agent.monthlyBudget}).`,
+        `Monthly budget limit exceeded: Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) + monthly spent (${agent.spentMonthly}) exceeds monthly budget limit (${agent.monthlyBudget}).`,
         'MONTHLY_BUDGET_EXCEEDED'
       );
     }
 
-    // Rule 12: Amount Threshold Evaluation (ALLOW vs REQUIRE_HUMAN_APPROVAL)
+    // Rule 11: Unknown / Unregistered Vendor Check -> REQUIRE_HUMAN_APPROVAL
+    if (!vendor) {
+      return makeResult(
+        'REQUIRE_HUMAN_APPROVAL',
+        `Unknown vendor "${paymentIntent.rawVendorName}". Unregistered vendors require human sign-off before proceeding.`,
+        'UNKNOWN_VENDOR_REQUIRES_HUMAN_APPROVAL'
+      );
+    }
+
+    // Rule 12: Amount Approval Threshold Evaluation (autoApproveLimit vs humanApprovalLimit)
     if (paymentIntent.amount <= policy.autoApproveLimit) {
       return makeResult(
         'ALLOW',
-        `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) is within auto-approval threshold (${policy.autoApproveLimit}).`,
+        `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) is within auto-approval limit (${policy.autoApproveLimit}).`,
         'AUTO_APPROVED'
       );
     }
 
     if (
       paymentIntent.amount > policy.autoApproveLimit &&
-      paymentIntent.amount <= policy.humanApprovalThreshold
+      paymentIntent.amount <= policy.humanApprovalLimit
     ) {
       return makeResult(
         'REQUIRE_HUMAN_APPROVAL',
-        `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds auto-approval threshold (${policy.autoApproveLimit}) but is within human approval threshold (${policy.humanApprovalThreshold}). Requires human sign-off.`,
+        `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds auto-approval limit (${policy.autoApproveLimit}) but is within human approval limit (${policy.humanApprovalLimit}). Requires human sign-off.`,
         'HUMAN_APPROVAL_REQUIRED'
       );
     }
 
     return makeResult(
       'BLOCK',
-      `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds maximum human approval threshold (${policy.humanApprovalThreshold}).`,
-      'EXCEEDS_HUMAN_THRESHOLD'
+      `Transaction amount (${paymentIntent.currency} ${paymentIntent.amount}) exceeds human approval limit (${policy.humanApprovalLimit}).`,
+      'EXCEEDS_HUMAN_APPROVAL_LIMIT'
     );
   }
 }

@@ -12,9 +12,8 @@ model Agent {
   name           String
   role           String
   status         String          @default("ACTIVE") // ACTIVE, PAUSED, REVOKED
-  dailyBudget    Float           // Max allowed expenditure per day in currency units
-  monthlyBudget  Float           // Max allowed expenditure per month in currency units
-  perTxLimit     Float           // Max allowed single transaction amount
+  dailyBudget    Float           // Max allowed expenditure per day
+  monthlyBudget  Float           // Max allowed expenditure per month
   spentDaily     Float           @default(0.0)
   spentMonthly   Float           @default(0.0)
   createdAt      DateTime        @default(now())
@@ -29,8 +28,9 @@ model AgentPolicy {
   id                         String   @id @default(uuid())
   agentId                    String   @unique
   agent                      Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  autoApproveLimit           Float    // Max amount for automatic ALLOW
-  humanApprovalThreshold     Float    // Max amount for REQUIRE_HUMAN_APPROVAL (amounts > this are BLOCKED)
+  autoApproveLimit           Float    @default(5000.0)  // <= autoApproveLimit -> ALLOW
+  humanApprovalLimit         Float    @default(10000.0) // > autoApproveLimit & <= humanApprovalLimit -> REQUIRE_HUMAN_APPROVAL
+  hardMaximum                Float    @default(10000.0) // > hardMaximum -> BLOCK
   allowedCategories          String   // JSON string array e.g. ["RESEARCH_PAPER", "DATASET", "CLOUD_COMPUTE"]
   blockedCategories          String   // JSON string array e.g. ["GAMBLING", "CRYPTO"]
   allowedVendorIds           String   // JSON string array of pre-approved vendor IDs

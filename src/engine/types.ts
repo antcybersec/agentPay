@@ -7,7 +7,6 @@ export interface AgentContext {
   status: string;
   dailyBudget: number;
   monthlyBudget: number;
-  perTxLimit: number;
   spentDaily: number;
   spentMonthly: number;
 }
@@ -16,7 +15,8 @@ export interface AgentPolicyContext {
   id: string;
   agentId: string;
   autoApproveLimit: number;
-  humanApprovalThreshold: number;
+  humanApprovalLimit: number;
+  hardMaximum: number;
   allowedCategories: string[];
   blockedCategories: string[];
   allowedVendorIds: string[];
