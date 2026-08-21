@@ -1,11 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { PrismaClient } from '@prisma/client';
 import { PolicyEngine } from '../src/engine/policyEngine.js';
+import { PaymentIntentService } from '../src/services/paymentIntentService.js';
 import {
   AgentContext,
   AgentPolicyContext,
   VendorContext,
   PaymentIntentInput,
 } from '../src/engine/types.js';
+
+const prisma = new PrismaClient();
 
 describe('Deterministic Policy Engine Correction Suite', () => {
   // Demo Agent setup
@@ -73,6 +77,7 @@ describe('Deterministic Policy Engine Correction Suite', () => {
     expect(result.approved).toBe(true);
     expect(result.requiresHumanReview).toBe(false);
     expect(result.ruleTriggered).toBe('AUTO_APPROVED');
+    expect(result.evalSnapshot.purpose).toBe('Download dataset');
   });
 
   // Test 2: ₹7,500 verified vendor → REQUIRE_HUMAN_APPROVAL
@@ -191,12 +196,12 @@ describe('Deterministic Policy Engine Correction Suite', () => {
   it('7. should return BLOCK when transaction exceeds daily budget', () => {
     const agentNearDailyLimit: AgentContext = {
       ...mockAgent,
-      spentDaily: 19500.0, // Daily budget is 20,000. Remaining: 500
+      spentDaily: 19500.0,
     };
 
     const paymentIntent: PaymentIntentInput = {
       rawVendorName: 'ArXiv Data Insights',
-      amount: 1000.0, // 19500 + 1000 = 20500 > 20000 limit
+      amount: 1000.0,
       currency: 'INR',
       category: 'RESEARCH_PAPER',
       purpose: 'Paper dataset download',
@@ -218,12 +223,12 @@ describe('Deterministic Policy Engine Correction Suite', () => {
   it('8. should return BLOCK when transaction exceeds monthly budget', () => {
     const agentNearMonthlyLimit: AgentContext = {
       ...mockAgent,
-      spentMonthly: 98000.0, // Monthly budget is 100,000. Remaining: 2000
+      spentMonthly: 98000.0,
     };
 
     const paymentIntent: PaymentIntentInput = {
       rawVendorName: 'ArXiv Data Insights',
-      amount: 3000.0, // 98000 + 3000 = 101000 > 100000 limit
+      amount: 3000.0,
       currency: 'INR',
       category: 'RESEARCH_PAPER',
       purpose: 'Large dataset subscription',
@@ -266,5 +271,155 @@ describe('Deterministic Policy Engine Correction Suite', () => {
     expect(result.decision).toBe('BLOCK');
     expect(result.approved).toBe(false);
     expect(result.ruleTriggered).toBe('AGENT_INACTIVE');
+  });
+});
+
+describe('Idempotency & Database Integration Tests', () => {
+  const testAgentId = 'agent-researchbot-001';
+  const secondAgentId = 'agent-secondbot-002';
+
+  beforeAll(async () => {
+    // Ensure secondary test agent exists for cross-agent key testing
+    await prisma.agent.upsert({
+      where: { id: secondAgentId },
+      update: {},
+      create: {
+        id: secondAgentId,
+        name: 'SecondBot',
+        role: 'Backup Research Agent',
+        status: 'ACTIVE',
+        dailyBudget: 20000.0,
+        monthlyBudget: 100000.0,
+        spentDaily: 0.0,
+        spentMonthly: 0.0,
+        policy: {
+          create: {
+            id: 'policy-secondbot-002',
+            autoApproveLimit: 5000.0,
+            humanApprovalLimit: 10000.0,
+            hardMaximum: 10000.0,
+            allowedCategories: JSON.stringify(['RESEARCH_PAPER']),
+            blockedCategories: JSON.stringify(['GAMBLING']),
+            allowedVendorIds: JSON.stringify(['vendor-arxiv-001']),
+            requireVendorVerification: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  it('First request creates PaymentIntent & AuditEvent', async () => {
+    const key = `test-key-unique-${Date.now()}`;
+    const result = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Testing idempotency creation',
+      idempotencyKey: key,
+    });
+
+    expect(result.isIdempotentReplay).toBe(false);
+    expect(result.paymentIntent.idempotencyKey).toBe(key);
+    expect(result.paymentIntent.status).toBe('APPROVED');
+    expect(result.paymentIntent.decision).toBe('ALLOW');
+    expect(result.auditEvent).toBeDefined();
+
+    // Verify purpose is in audit snapshot
+    const metadata = JSON.parse(result.auditEvent.metadata);
+    expect(metadata.evalSnapshot.purpose).toBe('Testing idempotency creation');
+  });
+
+  it('Identical retry with same idempotencyKey returns existing PaymentIntent without creating another AuditEvent', async () => {
+    const key = `test-key-retry-${Date.now()}`;
+    
+    // First call
+    const res1 = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Testing retry behavior',
+      idempotencyKey: key,
+    });
+
+    const initialAuditCount = await prisma.auditEvent.count({
+      where: { paymentIntentId: res1.paymentIntent.id },
+    });
+    expect(initialAuditCount).toBe(1);
+
+    // Second (retry) call
+    const res2 = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Testing retry behavior',
+      idempotencyKey: key,
+    });
+
+    expect(res2.isIdempotentReplay).toBe(true);
+    expect(res2.paymentIntent.id).toBe(res1.paymentIntent.id);
+    expect(res2.evaluation.decision).toBe(res1.evaluation.decision);
+
+    const postRetryAuditCount = await prisma.auditEvent.count({
+      where: { paymentIntentId: res1.paymentIntent.id },
+    });
+    expect(postRetryAuditCount).toBe(1); // AuditEvent count remains 1!
+  });
+
+  it('Same idempotencyKey with a different agent does NOT reuse another agent PaymentIntent', async () => {
+    const sharedKey = `shared-key-test-${Date.now()}`;
+
+    // Agent 1 creates intent with key
+    const resAgent1 = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Agent 1 request',
+      idempotencyKey: sharedKey,
+    });
+
+    // Agent 2 creates intent with same key string
+    const resAgent2 = await PaymentIntentService.evaluateAndCreateIntent(secondAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Agent 2 request',
+      idempotencyKey: sharedKey,
+    });
+
+    expect(resAgent2.isIdempotentReplay).toBe(false);
+    expect(resAgent2.paymentIntent.id).not.toBe(resAgent1.paymentIntent.id);
+    expect(resAgent2.paymentIntent.agentId).toBe(secondAgentId);
+  });
+
+  it('Requests without idempotencyKey continue working normally', async () => {
+    const res1 = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'No key request 1',
+    });
+
+    const res2 = await PaymentIntentService.evaluateAndCreateIntent(testAgentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'No key request 2',
+    });
+
+    expect(res1.paymentIntent.idempotencyKey).toBeNull();
+    expect(res2.paymentIntent.idempotencyKey).toBeNull();
+    expect(res1.paymentIntent.id).not.toBe(res2.paymentIntent.id);
   });
 });

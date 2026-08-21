@@ -43,7 +43,7 @@ app.get('/api/vendors', async (req: Request, res: Response) => {
 // POST /api/payment-intents/evaluate - Evaluate a payment intent
 app.post('/api/payment-intents/evaluate', async (req: Request, res: Response) => {
   try {
-    const { agentId, rawVendorName, amount, currency, category, purpose } = req.body;
+    const { agentId, rawVendorName, amount, currency, category, purpose, idempotencyKey } = req.body;
 
     if (!agentId || !rawVendorName || amount === undefined || !category) {
       return res.status(400).json({
@@ -58,6 +58,7 @@ app.post('/api/payment-intents/evaluate', async (req: Request, res: Response) =>
       currency: currency || 'INR',
       category,
       purpose: purpose || 'Agent automated purchase',
+      idempotencyKey,
     });
 
     res.json({

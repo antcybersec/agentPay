@@ -26,6 +26,7 @@ export class PolicyEngine {
       vendorId: vendor ? vendor.id : null,
       vendorName: vendor ? vendor.name : paymentIntent.rawVendorName,
       category: paymentIntent.category,
+      purpose: paymentIntent.purpose,
       dailyBudget: agent.dailyBudget,
       spentDaily: agent.spentDaily,
       dailyBudgetRemaining: dailyRemaining,

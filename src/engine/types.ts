@@ -39,6 +39,7 @@ export interface PaymentIntentInput {
   currency: string;
   category: string;
   purpose: string;
+  idempotencyKey?: string;
 }
 
 export interface EvaluationInput {
@@ -55,6 +56,7 @@ export interface EvaluationSnapshot {
   vendorId?: string | null;
   vendorName: string;
   category: string;
+  purpose: string;
   dailyBudget: number;
   spentDaily: number;
   dailyBudgetRemaining: number;

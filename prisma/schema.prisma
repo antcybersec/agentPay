@@ -64,6 +64,7 @@ model PaymentIntent {
   currency          String       @default("INR")
   category          String
   purpose           String
+  idempotencyKey    String?
   status            String       @default("CREATED") // CREATED, EVALUATED, APPROVED, REJECTED, PENDING_HUMAN_APPROVAL, COMPLETED, FAILED
   decision          String?      // ALLOW, BLOCK, REQUIRE_HUMAN_APPROVAL
   rejectionReason   String?
@@ -73,6 +74,8 @@ model PaymentIntent {
   updatedAt         DateTime     @updatedAt
 
   auditEvents       AuditEvent[]
+
+  @@unique([agentId, idempotencyKey])
 }
 
 model AuditEvent {
