@@ -1,23 +1,40 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import { PaymentIntentService } from './services/paymentIntentService.js';
 import { RazorpayService } from './services/razorpayService.js';
 import { WebhookService } from './services/webhookService.js';
+import { PolicyEngine } from './engine/policyEngine.js';
 
 const prisma = new PrismaClient();
 const app = express();
 
 app.use(cors());
 
+// Admin Authentication Middleware
+const requireAdminAuth = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ success: false, error: 'Missing Authorization header' });
+  }
+
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  const adminKey = process.env.ADMIN_API_KEY || 'admin_secret_key_123';
+
+  if (token !== adminKey) {
+    return res.status(401).json({ success: false, error: 'Invalid admin API key' });
+  }
+
+  next();
+};
+
 // Special raw body parser for Webhook signature verification endpoint
 app.post('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
   try {
     const signature = (req.headers['x-razorpay-signature'] as string) || '';
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'dummy_webhook_secret';
-    const rawBody = req.body; // Buffer from express.raw
+    const rawBody = req.body;
 
-    // 1. Verify HMAC Signature
     const isValidSignature = WebhookService.verifyWebhookSignature(rawBody, signature, webhookSecret);
 
     if (!isValidSignature) {
@@ -28,10 +45,7 @@ app.post('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), as
       });
     }
 
-    // 2. Parse JSON payload
     const eventPayload = JSON.parse(rawBody.toString('utf8'));
-
-    // 3. Process event
     const result = await WebhookService.handleWebhookEvent(eventPayload);
 
     res.json({
@@ -132,8 +146,8 @@ app.post('/api/payment-intents/:id/create-order', async (req: Request, res: Resp
   }
 });
 
-// POST /api/payment-intents/:id/approve - Human Admin Approval endpoint
-app.post('/api/payment-intents/:id/approve', async (req: Request, res: Response) => {
+// POST /api/payment-intents/:id/approve - Protected Human Admin Approval Endpoint (with Current Policy Re-Evaluation)
+app.post('/api/payment-intents/:id/approve', requireAdminAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -152,7 +166,111 @@ app.post('/api/payment-intents/:id/approve', async (req: Request, res: Response)
       });
     }
 
-    // 1. Update intent status & decision
+    // --- RE-EVALUATE POLICY USING CURRENT DATABASE STATE ---
+    const agent = await prisma.agent.findUnique({
+      where: { id: intent.agentId },
+      include: { policy: true },
+    });
+
+    if (!agent || !agent.policy) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent or AgentPolicy not found for re-evaluation.',
+      });
+    }
+
+    const vendor = await prisma.vendor.findFirst({
+      where: {
+        OR: [
+          { id: intent.vendorId || undefined },
+          { name: { equals: intent.rawVendorName } },
+          { domain: { equals: intent.rawVendorName.toLowerCase() } },
+        ],
+      },
+    });
+
+    const allowedCategories: string[] = JSON.parse(agent.policy.allowedCategories || '[]');
+    const blockedCategories: string[] = JSON.parse(agent.policy.blockedCategories || '[]');
+    const allowedVendorIds: string[] = JSON.parse(agent.policy.allowedVendorIds || '[]');
+
+    const currentEval = PolicyEngine.evaluate({
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        role: agent.role,
+        status: agent.status,
+        dailyBudget: agent.dailyBudget,
+        monthlyBudget: agent.monthlyBudget,
+        spentDaily: agent.spentDaily,
+        spentMonthly: agent.spentMonthly,
+      },
+      policy: {
+        id: agent.policy.id,
+        agentId: agent.policy.agentId,
+        autoApproveLimit: agent.policy.autoApproveLimit,
+        humanApprovalLimit: agent.policy.humanApprovalLimit,
+        hardMaximum: agent.policy.hardMaximum,
+        allowedCategories,
+        blockedCategories,
+        allowedVendorIds,
+        requireVendorVerification: agent.policy.requireVendorVerification,
+        isActive: agent.policy.isActive,
+      },
+      vendor: vendor
+        ? {
+            id: vendor.id,
+            name: vendor.name,
+            domain: vendor.domain,
+            category: vendor.category,
+            status: vendor.status,
+            razorpayAccountId: vendor.razorpayAccountId,
+          }
+        : null,
+      paymentIntent: {
+        rawVendorName: intent.rawVendorName,
+        amount: intent.amount,
+        currency: intent.currency,
+        category: intent.category,
+        purpose: intent.purpose,
+      },
+    });
+
+    // IF CURRENT POLICY EVALUATES TO BLOCK -> REJECT APPROVAL & DO NOT CREATE ORDER
+    if (currentEval.decision === 'BLOCK') {
+      const rejectedIntent = await prisma.paymentIntent.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          decision: 'BLOCK',
+          rejectionReason: `Approval Denied: Current policy re-evaluation failed - ${currentEval.reason}`,
+        },
+      });
+
+      await prisma.auditEvent.create({
+        data: {
+          paymentIntentId: id,
+          agentId: intent.agentId,
+          eventType: 'HUMAN_APPROVAL_DENIED_POLICY_VIOLATION',
+          decision: 'BLOCK',
+          reason: `Approval denied upon re-evaluation: ${currentEval.reason}`,
+          metadata: JSON.stringify({
+            ruleTriggered: currentEval.ruleTriggered,
+            evalSnapshot: currentEval.evalSnapshot,
+          }),
+        },
+      });
+
+      return res.status(400).json({
+        success: false,
+        error: `Approval denied: Current policy is no longer satisfied (${currentEval.reason}).`,
+        data: {
+          intent: rejectedIntent,
+          evaluation: currentEval,
+        },
+      });
+    }
+
+    // IF CURRENT POLICY IS STILL SATISFIED -> APPROVE INTENT & CREATE ORDER
     const updatedIntent = await prisma.paymentIntent.update({
       where: { id },
       data: {
@@ -161,19 +279,22 @@ app.post('/api/payment-intents/:id/approve', async (req: Request, res: Response)
       },
     });
 
-    // 2. Log Audit Event
     await prisma.auditEvent.create({
       data: {
         paymentIntentId: id,
         agentId: intent.agentId,
         eventType: 'HUMAN_APPROVED',
         decision: 'HUMAN_APPROVED',
-        reason: 'Human admin manually approved payment intent.',
-        metadata: JSON.stringify({ approvedBy: 'Admin', approvedAt: new Date().toISOString() }),
+        reason: 'Human admin manually approved payment intent after verified policy re-evaluation.',
+        metadata: JSON.stringify({
+          approvedBy: 'Admin',
+          approvedAt: new Date().toISOString(),
+          reEvaluation: currentEval,
+        }),
       },
     });
 
-    // 3. Immediately trigger Razorpay Order creation
+    // Create Razorpay Order
     const orderResult = await RazorpayService.createOrder(id);
 
     res.json({
@@ -188,8 +309,8 @@ app.post('/api/payment-intents/:id/approve', async (req: Request, res: Response)
   }
 });
 
-// POST /api/payment-intents/:id/reject - Human Admin Rejection endpoint
-app.post('/api/payment-intents/:id/reject', async (req: Request, res: Response) => {
+// POST /api/payment-intents/:id/reject - Protected Human Admin Rejection Endpoint
+app.post('/api/payment-intents/:id/reject', requireAdminAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
