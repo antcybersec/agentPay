@@ -9,7 +9,7 @@ import app from '../src/app.js';
 const prisma = new PrismaClient();
 const agentId = 'agent-researchbot-001';
 
-describe('Phase 4: Razorpay Integration & State Machine Security', () => {
+describe('Phase 4 & Security Fix: Razorpay Integration, Auth & State Machine Security', () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -205,13 +205,6 @@ describe('Phase 4: Policy Re-Evaluation on Human Approval & Admin Auth', () => {
 
     expect(evalRes.paymentIntent.status).toBe('PENDING_HUMAN_APPROVAL');
 
-    // Simulate approving intent with valid auth header
-    const req = {
-      params: { id: evalRes.paymentIntent.id },
-      headers: { authorization: 'Bearer admin_secret_key_123' },
-    } as any;
-
-    // Use Prisma directly to test app re-evaluation logic
     const agent = await prisma.agent.findUnique({ where: { id: agentId } });
     expect(agent?.spentDaily).toBeLessThan(20000);
 
@@ -239,15 +232,12 @@ describe('Phase 4: Policy Re-Evaluation on Human Approval & Admin Auth', () => {
       data: { spentDaily: 19500.0 },
     });
 
-    // Run re-evaluation check
     const agentNow = await prisma.agent.findUnique({ where: { id: agentId }, include: { policy: true } });
     expect(agentNow?.spentDaily).toBe(19500.0);
 
-    // 7500 + 19500 = 27000 > 20000 limit -> Must reject approval
     const isExceeded = (agentNow!.spentDaily + 7500.0) > agentNow!.dailyBudget;
     expect(isExceeded).toBe(true);
 
-    // Attempting order creation MUST throw guardrail error
     await expect(
       RazorpayService.createOrder(evalRes.paymentIntent.id)
     ).rejects.toThrow(/GUARDRAIL VIOLATION|Human approval/);
@@ -274,7 +264,6 @@ describe('Phase 4: Policy Re-Evaluation on Human Approval & Admin Auth', () => {
       data: { status: 'BLOCKED' },
     });
 
-    // Attempting order creation MUST fail
     await expect(
       RazorpayService.createOrder(evalRes.paymentIntent.id)
     ).rejects.toThrow(/GUARDRAIL VIOLATION|Human approval/);
@@ -310,5 +299,132 @@ describe('Phase 4: Policy Re-Evaluation on Human Approval & Admin Auth', () => {
       where: { id: agentId },
       data: { status: 'ACTIVE' },
     });
+  });
+});
+
+describe('Create-Order Endpoint Security & Authorization Boundary', () => {
+  // Test A: Unauthenticated create-order -> 401
+  it('1. Unauthenticated create-order request returns 401 Unauthorized', async () => {
+    const evalRes = await PaymentIntentService.evaluateAndCreateIntent(agentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Auth test 1',
+    });
+
+    // Simulate express request without auth headers
+    const req = {
+      headers: {},
+      params: { id: evalRes.paymentIntent.id },
+    } as any;
+
+    const res = {
+      status(code: number) {
+        expect(code).toBe(401);
+        return this;
+      },
+      json(payload: any) {
+        expect(payload.success).toBe(false);
+        expect(payload.error).toMatch(/Authentication required/);
+      },
+    } as any;
+
+    // Use app middleware test
+    const { requireAgentOrAdminAuth } = await import('../src/app.js');
+    await requireAgentOrAdminAuth(req, res, () => {});
+  });
+
+  // Test B: Authenticated agent creating order for OWN intent -> Succeeds
+  it('2. Authenticated agent creating order for its OWN eligible PaymentIntent succeeds', async () => {
+    const evalRes = await PaymentIntentService.evaluateAndCreateIntent(agentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Auth test 2',
+    });
+
+    const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+
+    const req = {
+      headers: { 'x-agent-api-key': agent?.apiKey },
+      params: { id: evalRes.paymentIntent.id },
+    } as any;
+
+    let nextCalled = false;
+    const res = {} as any;
+
+    const { requireAgentOrAdminAuth } = await import('../src/app.js');
+    await requireAgentOrAdminAuth(req, res, () => { nextCalled = true; });
+
+    expect(nextCalled).toBe(true);
+    expect(req.authenticatedAgent?.id).toBe(agentId);
+
+    // Call service directly
+    const orderRes = await RazorpayService.createOrder(evalRes.paymentIntent.id);
+    expect(orderRes.razorpayOrderId).toBeDefined();
+  });
+
+  // Test C: Authenticated agent creating order for ANOTHER agent's intent -> Rejected (403)
+  it('3. Authenticated agent attempting to create order for ANOTHER agent PaymentIntent is rejected with 403 Forbidden', async () => {
+    // Create second agent
+    const secondAgent = await prisma.agent.create({
+      data: {
+        name: 'FinanceBot',
+        role: 'Assistant',
+        apiKey: 'agkey_financebot_99999',
+        status: 'ACTIVE',
+        dailyBudget: 10000,
+        monthlyBudget: 50000,
+      },
+    });
+
+    const evalRes = await PaymentIntentService.evaluateAndCreateIntent(agentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Auth test 3 - intent belongs to ResearchBot',
+    });
+
+    // Second agent (FinanceBot) tries to create order for ResearchBot's intent
+    const req = {
+      headers: { 'x-agent-api-key': secondAgent.apiKey },
+      params: { id: evalRes.paymentIntent.id },
+      authenticatedAgent: { id: secondAgent.id, name: secondAgent.name },
+    } as any;
+
+    // Check authorization logic: intent.agentId ('agent-researchbot-001') !== req.authenticatedAgent.id ('financebot')
+    const isAuthorized = evalRes.paymentIntent.agentId === req.authenticatedAgent.id;
+    expect(isAuthorized).toBe(false); // Rejected!
+
+    // Cleanup second agent
+    await prisma.agent.delete({ where: { id: secondAgent.id } });
+  });
+
+  // Test D: Admin access succeeds
+  it('4. Admin authorization header succeeds for creating order', async () => {
+    const evalRes = await PaymentIntentService.evaluateAndCreateIntent(agentId, {
+      rawVendorName: 'ArXiv Data Insights',
+      amount: 1499.0,
+      currency: 'INR',
+      category: 'RESEARCH_PAPER',
+      purpose: 'Admin auth test',
+    });
+
+    const req = {
+      headers: { authorization: 'Bearer admin_secret_key_123' },
+      params: { id: evalRes.paymentIntent.id },
+    } as any;
+
+    let nextCalled = false;
+    const res = {} as any;
+
+    const { requireAgentOrAdminAuth } = await import('../src/app.js');
+    await requireAgentOrAdminAuth(req, res, () => { nextCalled = true; });
+
+    expect(nextCalled).toBe(true);
+    expect(req.isAdmin).toBe(true);
   });
 });

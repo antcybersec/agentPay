@@ -16,6 +16,17 @@ const app = express();
 
 app.use(cors());
 
+export interface AuthenticatedUserRequest extends Request {
+  authenticatedAgent?: {
+    id: string;
+    name: string;
+    role: string;
+    apiKey: string;
+    status: string;
+  };
+  isAdmin?: boolean;
+}
+
 // Admin Authentication Middleware
 const requireAdminAuth = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers['authorization'];
@@ -31,6 +42,46 @@ const requireAdminAuth = (req: Request, res: Response, next: NextFunction) => {
   }
 
   next();
+};
+
+// Dual Middleware: Requires either Admin Authorization header or Agent API Key header
+export const requireAgentOrAdminAuth = async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+  const authHeader = req.headers['authorization'];
+  const agentApiKey = req.headers['x-agent-api-key'] as string;
+
+  // 1. Check Admin Auth Header
+  if (authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const adminKey = process.env.ADMIN_API_KEY || 'admin_secret_key_123';
+    if (token === adminKey) {
+      req.isAdmin = true;
+      return next();
+    }
+  }
+
+  // 2. Check Agent API Key Header
+  if (agentApiKey) {
+    try {
+      const agent = await prisma.agent.findUnique({ where: { apiKey: agentApiKey } });
+      if (agent && agent.status === 'ACTIVE') {
+        req.authenticatedAgent = {
+          id: agent.id,
+          name: agent.name,
+          role: agent.role,
+          apiKey: agent.apiKey || agentApiKey,
+          status: agent.status,
+        };
+        return next();
+      }
+    } catch (err) {
+      // Fall through to 401
+    }
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: 'Authentication required. Provide a valid Agent API key (x-agent-api-key) or Admin Authorization header.',
+  });
 };
 
 // Special raw body parser for Webhook signature verification endpoint
@@ -192,10 +243,32 @@ app.post('/api/payment-intents/evaluate', async (req: Request, res: Response) =>
   }
 });
 
-// POST /api/payment-intents/:id/create-order - Create Razorpay order for an approved intent
-app.post('/api/payment-intents/:id/create-order', async (req: Request, res: Response) => {
+// POST /api/payment-intents/:id/create-order - Protected Razorpay Order Creation Endpoint
+app.post('/api/payment-intents/:id/create-order', requireAgentOrAdminAuth, async (req: AuthenticatedUserRequest, res: Response) => {
   try {
     const { id } = req.params;
+
+    // Fetch intent to verify ownership authorization boundary
+    const intent = await prisma.paymentIntent.findUnique({ where: { id } });
+
+    if (!intent) {
+      return res.status(404).json({
+        success: false,
+        error: `PaymentIntent "${id}" not found.`,
+      });
+    }
+
+    // Authorization Guard: Agent can ONLY create order for its own PaymentIntent
+    if (!req.isAdmin && req.authenticatedAgent) {
+      if (intent.agentId !== req.authenticatedAgent.id) {
+        return res.status(403).json({
+          success: false,
+          error: `Access denied: Agent "${req.authenticatedAgent.name}" is not authorized to create orders for another agent's PaymentIntent.`,
+        });
+      }
+    }
+
+    // Execute state-machine guarded Razorpay order creation
     const result = await RazorpayService.createOrder(id);
 
     res.json({
