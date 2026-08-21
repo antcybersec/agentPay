@@ -11,6 +11,7 @@ model Agent {
   id             String          @id @default(uuid())
   name           String
   role           String
+  apiKey         String?         @unique // Server-side API key for agent authentication
   status         String          @default("ACTIVE") // ACTIVE, PAUSED, REVOKED
   dailyBudget    Float           // Max allowed expenditure per day
   monthlyBudget  Float           // Max allowed expenditure per month

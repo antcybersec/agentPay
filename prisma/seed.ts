@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('🌱 Seeding AgentPay database with updated policy semantics...');
+  console.log('🌱 Seeding AgentPay database with Agent API Key authentication...');
 
   // Clean existing records
   await prisma.auditEvent.deleteMany();
@@ -58,12 +58,13 @@ async function main() {
 
   console.log('✅ Demo Vendors Seeded');
 
-  // 2. Seed Agent (ResearchBot)
+  // 2. Seed Agent (ResearchBot) with secure API Key
   const agent = await prisma.agent.create({
     data: {
       id: 'agent-researchbot-001',
       name: 'ResearchBot',
       role: 'Autonomous AI Researcher & Data Procurement Agent',
+      apiKey: 'agkey_researchbot_7f8a9b2c3d',
       status: 'ACTIVE',
       dailyBudget: 20000.0,   // ₹20,000 / day
       monthlyBudget: 100000.0, // ₹100,000 / month
@@ -72,9 +73,9 @@ async function main() {
     },
   });
 
-  console.log('✅ Agent (ResearchBot) Seeded');
+  console.log('✅ Agent (ResearchBot) Seeded with API Key');
 
-  // 3. Seed Updated Financial Policy for ResearchBot
+  // 3. Seed Financial Policy for ResearchBot
   await prisma.agentPolicy.create({
     data: {
       id: 'policy-researchbot-001',

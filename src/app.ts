@@ -6,6 +6,11 @@ import { RazorpayService } from './services/razorpayService.js';
 import { WebhookService } from './services/webhookService.js';
 import { PolicyEngine } from './engine/policyEngine.js';
 
+// Phase 5 Agent Imports
+import { requireAgentAuth, AuthenticatedAgentRequest } from './agent/agentAuth.js';
+import { PaymentTool } from './agent/paymentTool.js';
+import { AgentRuntime } from './agent/agentRuntime.js';
+
 const prisma = new PrismaClient();
 const app = express();
 
@@ -68,7 +73,7 @@ app.use(express.json());
 app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    service: 'AgentPay Guardrail & Razorpay Gateway Engine',
+    service: 'AgentPay Guardrail, Agent Runtime & Razorpay Gateway Engine',
     timestamp: new Date().toISOString(),
   });
 });
@@ -94,6 +99,65 @@ app.get('/api/vendors', async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// =========================================================
+// PHASE 5: UNTRUSTED AGENT RUNTIME ENDPOINTS
+// =========================================================
+
+// POST /api/agent/request-payment - Direct tool invocation by authenticated Agent
+app.post('/api/agent/request-payment', requireAgentAuth, async (req: AuthenticatedAgentRequest, res: Response) => {
+  try {
+    const agentId = req.authenticatedAgent!.id;
+    const result = await PaymentTool.execute(agentId, req.body);
+
+    res.json({
+      success: true,
+      agent: {
+        id: req.authenticatedAgent!.id,
+        name: req.authenticatedAgent!.name,
+      },
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// POST /api/agent/run-scenario - Execute demo scenario (A: ALLOW, B: HUMAN_APPROVAL, C: BLOCK)
+app.post('/api/agent/run-scenario', requireAgentAuth, async (req: AuthenticatedAgentRequest, res: Response) => {
+  try {
+    const agentId = req.authenticatedAgent!.id;
+    const { scenario, prompt, customAmount, customVendor } = req.body;
+
+    const result = await AgentRuntime.runScenario(agentId, {
+      scenario: scenario || 'A',
+      prompt,
+      customAmount: customAmount ? Number(customAmount) : undefined,
+      customVendor,
+    });
+
+    res.json({
+      success: true,
+      agent: {
+        id: req.authenticatedAgent!.id,
+        name: req.authenticatedAgent!.name,
+      },
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// =========================================================
+// BACKEND POLICY EVALUATION & ORDER ENDPOINTS
+// =========================================================
 
 // POST /api/payment-intents/evaluate - Evaluate a payment intent
 app.post('/api/payment-intents/evaluate', async (req: Request, res: Response) => {
@@ -146,7 +210,7 @@ app.post('/api/payment-intents/:id/create-order', async (req: Request, res: Resp
   }
 });
 
-// POST /api/payment-intents/:id/approve - Protected Human Admin Approval Endpoint (with Current Policy Re-Evaluation)
+// POST /api/payment-intents/:id/approve - Protected Human Admin Approval Endpoint (with Policy Re-Evaluation)
 app.post('/api/payment-intents/:id/approve', requireAdminAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
