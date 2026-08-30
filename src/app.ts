@@ -1,6 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { prisma } from './prisma.js';
 import { ensureDatabaseSeeded } from './services/dbInit.js';
 import { PaymentIntentService } from './services/paymentIntentService.js';
@@ -923,6 +925,24 @@ app.post('/api/test/reset-demo', requireDevOrTestEnvironment, async (req: Reques
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// Serve frontend static assets from public/ folder
+const publicDir = path.join(process.cwd(), 'public');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+
+// Fallback all non-API GET requests to index.html for client-side SPA routing
+app.get('*', (req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api') || req.path === '/health') {
+    return next();
+  }
+  const indexPath = path.join(publicDir, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  return res.status(404).send('Cannot GET ' + req.path);
 });
 
 export default app;
