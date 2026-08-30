@@ -7,3 +7,4 @@ prisma/*.db-journal
 coverage/
 frontend/node_modules/
 frontend/dist/
+public/
