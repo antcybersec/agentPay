@@ -67,7 +67,7 @@ function SiteNav() {
     <header className="sticky top-0 z-40 bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-[1240px] items-center justify-between gap-6 px-5">
         <div className="flex items-center gap-2.5">
-          <span className="grid size-7 place-items-center rounded-lg bg-ink text-[12px] font-bold text-ink-foreground">
+          <span className="grid size-7 place-items-center rounded-lg bg-[#1e1430] text-[12px] font-bold text-[#faf5ff]">
             A
           </span>
           <span className="text-[15px] font-bold tracking-[-0.02em]">AgentPay</span>
@@ -88,10 +88,10 @@ function SiteNav() {
         </nav>
         <Link
           to="/dashboard"
-          className="inline-flex items-center gap-2 rounded-full bg-ink py-2.5 pl-4 pr-2.5 text-[13px] font-semibold text-ink-foreground transition-opacity hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-full bg-[#1e1430] text-[#faf5ff] py-2.5 pl-4 pr-2.5 text-[13px] font-semibold transition-opacity hover:opacity-90 shadow-sm"
         >
           Open control plane
-          <span className="grid size-6 place-items-center rounded-full bg-ink-foreground/15">
+          <span className="grid size-6 place-items-center rounded-full bg-[#faf5ff]/20 text-[#faf5ff]">
             <ArrowRight className="size-3.5" />
           </span>
         </Link>
@@ -118,10 +118,10 @@ function Hero() {
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
             to="/dashboard"
-            className="inline-flex items-center gap-2.5 rounded-full bg-ink py-2.5 pl-5 pr-2.5 text-[14px] font-semibold text-ink-foreground transition-opacity hover:opacity-90"
+            className="inline-flex items-center gap-2.5 rounded-full bg-[#1e1430] text-[#faf5ff] py-2.5 pl-5 pr-2.5 text-[14px] font-semibold transition-opacity hover:opacity-90 shadow-sm"
           >
             Open control plane
-            <span className="grid size-7 place-items-center rounded-full bg-ink-foreground text-ink">
+            <span className="grid size-7 place-items-center rounded-full bg-[#faf5ff] text-[#1e1430]">
               <ArrowRight className="size-3.5" />
             </span>
           </Link>
@@ -167,10 +167,10 @@ function Meet() {
           <h2 className="display text-[46px] text-foreground sm:text-[54px]">Meet AgentPay.</h2>
           <Link
             to="/dashboard"
-            className="mt-6 inline-flex items-center gap-2.5 rounded-full bg-ink py-2.5 pl-5 pr-2.5 text-[14px] font-semibold text-ink-foreground transition-opacity hover:opacity-90"
+            className="mt-6 inline-flex items-center gap-2.5 rounded-full bg-[#1e1430] text-[#faf5ff] py-2.5 pl-5 pr-2.5 text-[14px] font-semibold transition-opacity hover:opacity-90 shadow-sm"
           >
             Start deciding
-            <span className="grid size-7 place-items-center rounded-full bg-ink-foreground text-ink">
+            <span className="grid size-7 place-items-center rounded-full bg-[#faf5ff] text-[#1e1430]">
               <ArrowRight className="size-3.5" />
             </span>
           </Link>
@@ -691,10 +691,10 @@ function SiteFooter() {
           </h2>
           <Link
             to="/dashboard"
-            className="inline-flex items-center gap-2.5 rounded-full bg-ink-foreground py-3 pl-6 pr-3 text-[14px] font-semibold text-ink transition-opacity hover:opacity-90"
+            className="inline-flex items-center gap-2.5 rounded-full bg-[#faf5ff] py-3 pl-6 pr-3 text-[14px] font-semibold text-[#1e1430] transition-opacity hover:opacity-90 shadow-sm"
           >
             Open control plane
-            <span className="grid size-7 place-items-center rounded-full bg-ink text-ink-foreground">
+            <span className="grid size-7 place-items-center rounded-full bg-[#1e1430] text-[#faf5ff]">
               <ArrowRight className="size-3.5" />
             </span>
           </Link>
@@ -703,10 +703,10 @@ function SiteFooter() {
         <div className="mt-12 grid gap-8 border-t border-ink-foreground/10 pt-10 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <div className="flex items-center gap-2.5">
-              <span className="grid size-7 place-items-center rounded-lg bg-ink-foreground text-[12px] font-bold text-ink">
+              <span className="grid size-7 place-items-center rounded-lg bg-[#faf5ff] text-[12px] font-bold text-[#1e1430]">
                 A
               </span>
-              <span className="text-[15px] font-bold text-ink-foreground">AgentPay</span>
+              <span className="text-[15px] font-bold text-[#faf5ff]">AgentPay</span>
             </div>
             <p className="mt-3 max-w-[220px] text-[13px] text-ink-muted">
               Deterministic payment control for autonomous agents.
