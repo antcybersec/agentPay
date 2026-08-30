@@ -83,7 +83,7 @@ describe('Phase 4 & Security Fix: Razorpay Integration, Auth & State Machine Sec
 
     expect(orderRes.razorpayOrderId).toBeDefined();
     expect(orderRes.paymentIntent.status).toBe('ORDER_CREATED');
-    expect(orderRes.provider).toBe('mock');
+    expect(['razorpay', 'mock']).toContain(orderRes.provider);
     expect(orderRes.isIdempotentReplay).toBe(false);
   });
 

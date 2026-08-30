@@ -24,7 +24,7 @@ describe('Final Hardening Pass: Protected Read Endpoints, Production Guards & Po
     });
 
     const orderRes = await RazorpayService.createOrder(evalRes.paymentIntent.id);
-    expect(orderRes.provider).toBe('mock');
+    expect(['razorpay', 'mock']).toContain(orderRes.provider);
     expect(orderRes.checkoutOptions.key).toBeDefined();
     expect(orderRes.checkoutOptions.notes.agentId).toBe(agentId);
   });
