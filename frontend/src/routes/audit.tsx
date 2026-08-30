@@ -39,7 +39,7 @@ function AuditPage() {
   const [type, setType] = useState("ALL");
 
   const events = useMemo(
-    () => [...(data ?? [])].sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
+    () => [...(data ?? [])].sort((a, b) => String(b?.timestamp || "").localeCompare(String(a?.timestamp || ""))),
     [data],
   );
   const types = useMemo(

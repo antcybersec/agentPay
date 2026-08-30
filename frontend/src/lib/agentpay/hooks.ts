@@ -64,8 +64,10 @@ export function useIntents() {
       }
     }
     const rows = [...map.values()];
-    rows.forEach((r) => r.events.sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    rows.forEach((r) =>
+      r.events.sort((a, b) => String(a?.timestamp || "").localeCompare(String(b?.timestamp || ""))),
+    );
+    rows.sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
     return rows;
   }, [query.data]);
 
