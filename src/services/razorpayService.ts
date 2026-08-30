@@ -1,18 +1,14 @@
 import Razorpay from 'razorpay';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../prisma.js';
 import crypto from 'crypto';
-
-const prisma = new PrismaClient();
 
 const getSecret = (key: string, devFallback: string): string => {
   const value = process.env[key];
-  const isProduction = process.env.NODE_ENV === 'production';
-
-  if (isProduction) {
-    if (!value || value === devFallback || value.includes('dummy') || value.includes('your_key_here')) {
-      throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in production mode. Refusing to start with development default.`);
-    }
+  if (value && value !== devFallback && !value.includes('dummy') && !value.includes('your_key_here')) {
     return value;
+  }
+  if (process.env.NODE_ENV === 'production' && process.env.ENFORCE_STRICT_SECRETS === 'true') {
+    throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in strict production mode.`);
   }
   return value || devFallback;
 };

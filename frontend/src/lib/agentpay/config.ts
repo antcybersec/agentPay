@@ -14,7 +14,10 @@ export type Connection = {
 };
 
 const envBase =
-  (import.meta.env["VITE_AGENTPAY_API_URL"] as string | undefined) ?? "http://localhost:4000/api";
+  (import.meta.env["VITE_AGENTPAY_API_URL"] as string | undefined) ??
+  (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
+    ? "/api"
+    : "http://localhost:4000/api");
 
 export const defaultConnection: Connection = {
   baseUrl: envBase,

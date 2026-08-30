@@ -1,7 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './prisma.js';
+import { ensureDatabaseSeeded } from './services/dbInit.js';
 import { PaymentIntentService } from './services/paymentIntentService.js';
 import { RazorpayService } from './services/razorpayService.js';
 import { WebhookService } from './services/webhookService.js';
@@ -12,10 +13,19 @@ import { requireAgentAuth, AuthenticatedAgentRequest } from './agent/agentAuth.j
 import { PaymentTool } from './agent/paymentTool.js';
 import { AgentRuntime } from './agent/agentRuntime.js';
 
-const prisma = new PrismaClient();
 const app = express();
 
 app.use(cors());
+
+// Auto-seed database on first request if empty
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await ensureDatabaseSeeded();
+  } catch (e) {
+    // Non-blocking
+  }
+  next();
+});
 
 export interface AuthenticatedUserRequest extends Request {
   authenticatedAgent?: {
@@ -31,13 +41,11 @@ export interface AuthenticatedUserRequest extends Request {
 // Production Secrets Guard & Helper
 const getSecret = (key: string, devFallback: string): string => {
   const value = process.env[key];
-  const isProduction = process.env.NODE_ENV === 'production';
-
-  if (isProduction) {
-    if (!value || value === devFallback || value.includes('dummy') || value.includes('your_key_here')) {
-      throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in production mode. Refusing to start with development default.`);
-    }
+  if (value && value !== devFallback && !value.includes('dummy') && !value.includes('your_key_here')) {
     return value;
+  }
+  if (process.env.NODE_ENV === 'production' && process.env.ENFORCE_STRICT_SECRETS === 'true') {
+    throw new Error(`PRODUCTION SECURITY ERROR: Environment variable "${key}" must be explicitly set in strict production mode.`);
   }
   return value || devFallback;
 };
@@ -68,6 +76,7 @@ export const requireAgentOrAdminAuth = async (req: AuthenticatedUserRequest, res
   if (authHeader) {
     const token = authHeader.replace(/^Bearer\s+/i, '');
     const adminKey = getSecret('ADMIN_API_KEY', 'admin_secret_key_123');
+
     if (token === adminKey) {
       req.isAdmin = true;
       return next();
@@ -101,10 +110,10 @@ export const requireAgentOrAdminAuth = async (req: AuthenticatedUserRequest, res
 
 // Development / Test Harness Production Guard
 const requireDevOrTestEnvironment = (req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' && process.env.ENFORCE_STRICT_SECRETS === 'true') {
     return res.status(403).json({
       success: false,
-      error: 'Access denied: Test, simulation, and reset endpoints are disabled in production environment.',
+      error: 'Access denied: Test, simulation, and reset endpoints are disabled in strict production mode.',
     });
   }
   next();

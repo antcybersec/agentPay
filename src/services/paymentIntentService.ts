@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../prisma.js';
 import { PolicyEngine } from '../engine/policyEngine.js';
 import { PaymentIntentInput, EvaluationResult } from '../engine/types.js';
-
-const prisma = new PrismaClient();
 
 export class PaymentIntentService {
   /**
